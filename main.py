@@ -18,6 +18,7 @@ OWNER_ID = int(OWNER_CHAT_ID_RAW) if OWNER_CHAT_ID_RAW.isdigit() else None
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
 RESEND_FROM = os.getenv("RESEND_FROM", "onboarding@resend.dev").strip()
+OWNER_EMAIL = os.getenv("OWNER_EMAIL", "").strip()  # used as 'me'/'myself' contact shortcut
 resend.api_key = RESEND_API_KEY
 
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
@@ -113,11 +114,11 @@ def load_contacts() -> dict:
             c = json.load(f)
     except FileNotFoundError:
         c = {}
-    if SMTP_USER:
+    if OWNER_EMAIL:
         if "myself" not in c:
-            c["myself"] = SMTP_USER
+            c["myself"] = OWNER_EMAIL
         if "me" not in c:
-            c["me"] = SMTP_USER
+            c["me"] = OWNER_EMAIL
     return c
 
 
