@@ -176,7 +176,21 @@ def send_email(to: str, subject: str, body: str):
         plain_text_content=body,
     )
     sg = SendGridAPIClient(SENDGRID_API_KEY)
-    response = sg.send(message)
+    try:
+        response = sg.send(message)
+    except Exception as e:
+        err_msg = str(e)
+        if hasattr(e, "body") and e.body:
+            try:
+                body_str = e.body.decode("utf-8") if isinstance(e.body, bytes) else str(e.body)
+                err_data = json.loads(body_str)
+                if "errors" in err_data and err_data["errors"]:
+                    err_msg = err_data["errors"][0].get("message", body_str)
+                else:
+                    err_msg = body_str
+            except Exception:
+                err_msg = f"{e} - {getattr(e, 'body', '')}"
+        raise ValueError(err_msg)
     if response.status_code >= 400:
         raise ValueError(f"SendGrid error {response.status_code}: {response.body}")
 
