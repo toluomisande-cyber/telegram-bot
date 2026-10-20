@@ -17,7 +17,7 @@ OWNER_CHAT_ID_RAW = os.environ.get("OWNER_CHAT_ID", "").strip()
 OWNER_ID = int(OWNER_CHAT_ID_RAW) if OWNER_CHAT_ID_RAW.isdigit() else None
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
-SMTP_USER = (os.getenv("SMTP_USER") or os.getenv("EMAIL_ADDRESS", "")).strip()  # used as 'from' address
+RESEND_FROM = os.getenv("RESEND_FROM", "onboarding@resend.dev").strip()
 resend.api_key = RESEND_API_KEY
 
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
@@ -166,10 +166,8 @@ async def contact(update, context):
 def send_email(to: str, subject: str, body: str):
     if not RESEND_API_KEY:
         raise ValueError("RESEND_API_KEY is not set. Add it as a Railway variable.")
-    if not SMTP_USER:
-        raise ValueError("SMTP_USER (your 'from' address) is not set. Add it to your environment variables.")
     params = {
-        "from": f"Telegram Bot <{SMTP_USER}>",
+        "from": f"Telegram Bot <{RESEND_FROM}>",
         "to": [to],
         "subject": subject,
         "text": body,
