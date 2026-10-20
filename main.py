@@ -1,5 +1,5 @@
-import os, json, asyncio, smtplib, logging, datetime as dt
-from email.message import EmailMessage
+import os, json, asyncio, logging, datetime as dt
+import resend
 
 import feedparser
 from dotenv import load_dotenv
@@ -16,10 +16,9 @@ TG_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
 OWNER_CHAT_ID_RAW = os.environ.get("OWNER_CHAT_ID", "").strip()
 OWNER_ID = int(OWNER_CHAT_ID_RAW) if OWNER_CHAT_ID_RAW.isdigit() else None
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "465"))
-SMTP_USER = (os.getenv("SMTP_USER") or os.getenv("EMAIL_ADDRESS", "")).strip()
-SMTP_PASS = (os.getenv("SMTP_PASS") or os.getenv("EMAIL_APP_PASSWORD", "")).replace(" ", "").strip()
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+SMTP_USER = (os.getenv("SMTP_USER") or os.getenv("EMAIL_ADDRESS", "")).strip()  # used as 'from' address
+resend.api_key = RESEND_API_KEY
 
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 groq = AsyncGroq(api_key=GROQ_KEY)
@@ -165,14 +164,17 @@ async def contact(update, context):
 
 # ---------- Email ----------
 def send_email(to: str, subject: str, body: str):
-    if not SMTP_USER or not SMTP_PASS:
-        raise ValueError("Email credentials not set. Add EMAIL_ADDRESS and EMAIL_APP_PASSWORD (or SMTP_USER/SMTP_PASS) to .env")
-    msg = EmailMessage()
-    msg["From"], msg["To"], msg["Subject"] = SMTP_USER, to, subject
-    msg.set_content(body)
-    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT) as s:
-        s.login(SMTP_USER, SMTP_PASS)
-        s.send_message(msg)
+    if not RESEND_API_KEY:
+        raise ValueError("RESEND_API_KEY is not set. Add it as a Railway variable.")
+    if not SMTP_USER:
+        raise ValueError("SMTP_USER (your 'from' address) is not set. Add it to your environment variables.")
+    params = {
+        "from": f"Telegram Bot <{SMTP_USER}>",
+        "to": [to],
+        "subject": subject,
+        "text": body,
+    }
+    resend.Emails.send(params)
 
 
 @owner_only
