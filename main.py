@@ -1,5 +1,6 @@
-import os, json, asyncio, smtplib, logging, datetime as dt
-from email.message import EmailMessage
+import os, json, asyncio, logging, datetime as dt
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 
 import feedparser
 from dotenv import load_dotenv
@@ -16,11 +17,9 @@ TG_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
 OWNER_CHAT_ID_RAW = os.environ.get("OWNER_CHAT_ID", "").strip()
 OWNER_ID = int(OWNER_CHAT_ID_RAW) if OWNER_CHAT_ID_RAW.isdigit() else None
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "").strip()
-SMTP_PASS = os.getenv("SMTP_PASS", "").replace(" ", "").strip()
-OWNER_EMAIL = os.getenv("OWNER_EMAIL", SMTP_USER).strip()  # 'me'/'myself' contact shortcut
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "").strip()
+SMTP_USER = os.getenv("SMTP_USER", "").strip()  # verified sender address
+OWNER_EMAIL = os.getenv("OWNER_EMAIL", SMTP_USER).strip()
 
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 groq = AsyncGroq(api_key=GROQ_KEY)
@@ -166,18 +165,20 @@ async def contact(update, context):
 
 # ---------- Email ----------
 def send_email(to: str, subject: str, body: str):
-    if not SMTP_USER or not SMTP_PASS:
-        raise ValueError("SMTP_USER and SMTP_PASS must be set in environment variables.")
-    msg = EmailMessage()
-    msg["From"] = SMTP_USER
-    msg["To"] = to
-    msg["Subject"] = subject
-    msg.set_content(body)
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
-        s.ehlo()
-        s.starttls()
-        s.login(SMTP_USER, SMTP_PASS)
-        s.send_message(msg)
+    if not SENDGRID_API_KEY:
+        raise ValueError("SENDGRID_API_KEY is not set in environment variables.")
+    if not SMTP_USER:
+        raise ValueError("SMTP_USER (your verified sender address) is not set.")
+    message = Mail(
+        from_email=SMTP_USER,
+        to_emails=to,
+        subject=subject,
+        plain_text_content=body,
+    )
+    sg = SendGridAPIClient(SENDGRID_API_KEY)
+    response = sg.send(message)
+    if response.status_code >= 400:
+        raise ValueError(f"SendGrid error {response.status_code}: {response.body}")
 
 
 @owner_only
