@@ -9,6 +9,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.request import HTTPXRequest
 from telegram.ext import (Application, CommandHandler, MessageHandler,
                           CallbackQueryHandler, ContextTypes, filters)
+from fastapi import FastAPI, Request, Response, status
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -93,6 +94,8 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE):
 async def daily(update, context):
     """/daily 08:00  (server time)  |  /daily off"""
     chat_id = update.effective_chat.id
+    if not context.job_queue:
+        return await update.message.reply_text("⚠️ Daily digest scheduling requires continuous background worker mode.")
     for j in context.job_queue.get_jobs_by_name(f"daily-{chat_id}"):
         j.schedule_removal()
     if not context.args or context.args[0] == "off":
@@ -106,6 +109,15 @@ async def daily(update, context):
 # ---------- Contacts ----------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONTACTS_FILE = os.path.join(BASE_DIR, "contacts.json")
+if os.environ.get("VERCEL") or not os.access(BASE_DIR, os.W_OK):
+    _tmp_path = "/tmp/contacts.json"
+    if not os.path.exists(_tmp_path) and os.path.exists(CONTACTS_FILE):
+        try:
+            import shutil
+            shutil.copyfile(CONTACTS_FILE, _tmp_path)
+        except Exception:
+            pass
+    CONTACTS_FILE = _tmp_path
 
 
 def load_contacts() -> dict:
@@ -306,22 +318,113 @@ async def start(update, context):
         "Or just send a message to chat.")
 
 
-def main():
+def build_application() -> Application:
+    """Builds and configures the python-telegram-bot Application instance."""
+    req = HTTPXRequest(connect_timeout=30.0, read_timeout=30.0)
+    bot_app = Application.builder().token(TG_TOKEN).request(req).build()
+    bot_app.add_handler(CommandHandler(["start", "help"], start))
+    bot_app.add_handler(CommandHandler(["clear", "reset"], clear_chat))
+    bot_app.add_handler(CommandHandler("news", news))
+    bot_app.add_handler(CommandHandler("daily", daily))
+    bot_app.add_handler(CommandHandler("email", email))
+    bot_app.add_handler(CommandHandler("contact", contact))
+    bot_app.add_handler(CallbackQueryHandler(email_buttons))
+    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+    return bot_app
+
+
+# -------------------------------------------------------------
+# Webhook / Serverless (Vercel) Entrypoint
+# -------------------------------------------------------------
+# Top-level 'app' exported for Vercel Python runtime
+app = FastAPI(
+    title="Personal Telegram AI Assistant Bot",
+    description="Webhook server for Telegram bot on Vercel or cloud runtimes.",
+    version="1.0.0",
+)
+
+_ptb_app: Application | None = None
+_ptb_initialized: bool = False
+
+
+async def get_ptb_app() -> Application:
+    """Lazily initializes the PTB Application for serverless webhook handling."""
+    global _ptb_app, _ptb_initialized
+    if _ptb_app is None:
+        _ptb_app = build_application()
+    if not _ptb_initialized:
+        await _ptb_app.initialize()
+        await _ptb_app.start()
+        _ptb_initialized = True
+    return _ptb_app
+
+
+@app.get("/")
+async def root():
+    return {
+        "status": "online",
+        "service": "Personal Telegram AI Assistant Bot",
+        "mode": "serverless-webhook",
+    }
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+@app.post("/")
+@app.post("/webhook")
+@app.post("/api/webhook")
+async def telegram_webhook(request: Request):
+    """Handles incoming Telegram updates forwarded via Webhook."""
+    if not TG_TOKEN:
+        return Response("TELEGRAM_TOKEN is not configured", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    try:
+        data = await request.json()
+        bot_app = await get_ptb_app()
+        update = Update.de_json(data, bot_app.bot)
+        await bot_app.process_update(update)
+        return Response(status_code=status.HTTP_200_OK)
+    except Exception as e:
+        logging.error(f"Error processing Telegram update: {e}", exc_info=True)
+        return Response(content=str(e), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@app.get("/set-webhook")
+async def set_webhook_endpoint(url: str = ""):
+    """Convenience endpoint to register the webhook with Telegram."""
+    if not TG_TOKEN:
+        return {"error": "TELEGRAM_TOKEN is not set in environment variables."}
+    if not url:
+        return {
+            "error": "Missing 'url' query parameter. Example: /set-webhook?url=https://your-vercel-domain.vercel.app/api/webhook"
+        }
+
+    bot_app = await get_ptb_app()
+    success = await bot_app.bot.set_webhook(url=url)
+    info = await bot_app.bot.get_webhook_info()
+    return {
+        "success": success,
+        "webhook_url": info.url,
+        "has_custom_certificate": info.has_custom_certificate,
+        "pending_update_count": info.pending_update_count,
+    }
+
+
+# -------------------------------------------------------------
+# Local / Worker (Railway / Render / VPS) Entrypoint
+# -------------------------------------------------------------
+def run_polling():
     if not TG_TOKEN:
         print("\n[ERROR] TELEGRAM_TOKEN is missing! Please configure it in your .env file.\n")
         return
-    req = HTTPXRequest(connect_timeout=30.0, read_timeout=30.0)
-    app = Application.builder().token(TG_TOKEN).request(req).build()
-    app.add_handler(CommandHandler(["start", "help"], start))
-    app.add_handler(CommandHandler(["clear", "reset"], clear_chat))
-    app.add_handler(CommandHandler("news", news))
-    app.add_handler(CommandHandler("daily", daily))
-    app.add_handler(CommandHandler("email", email))
-    app.add_handler(CommandHandler("contact", contact))
-    app.add_handler(CallbackQueryHandler(email_buttons))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
-    app.run_polling()
+    print("Starting Telegram bot in Long Polling mode...")
+    bot_app = build_application()
+    bot_app.run_polling()
 
 
 if __name__ == "__main__":
-    main()
+    run_polling()
+
